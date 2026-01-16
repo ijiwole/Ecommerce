@@ -55,7 +55,7 @@ A robust, scalable e-commerce backend API built with Go (Golang) and MongoDB. Th
 
 1. **Clone the repository**
    ```bash
-   git clone <repository-url>
+   git clone <github.com/ijiwole>
    cd ecommerce-yt
    ```
 
