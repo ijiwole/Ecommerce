@@ -20,6 +20,10 @@ vendor/
 # Go workspace file
 go.work
 
+# Air (hot reload) temporary files
+tmp/
+build-errors.log
+
 # IDE
 .idea/
 .vscode/

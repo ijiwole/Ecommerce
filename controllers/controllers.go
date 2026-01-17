@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github/akhil/ecommerce-yt/database"
@@ -193,7 +194,7 @@ func AdminSignUp() gin.HandlerFunc {
 		user.Updated_At, _ = time.Parse(time.RFC3339, time.Now().Format(time.RFC3339))
 		user.ID = primitive.NewObjectID()
 		user.User_ID = user.ID.Hex()
-		user.IsAdmin = true // Set as admin
+		user.IsAdmin = true
 		token, refreshtoken, _ := generate.TokenGenerator(*user.Email, *user.First_Name, *user.Last_Name, user.User_ID)
 		user.Token = &token
 		user.Refresh_Token = &refreshtoken
@@ -424,16 +425,26 @@ func SearchProduct() gin.HandlerFunc {
 
 }
 
-// SearchProductByQuery searches products by name or price (excludes sold products)
+// SearchProductByQuery searches products by name and/or price range (excludes sold products)
+// Query parameters:
+//   - search: optional product name search (case-insensitive regex)
+//   - min_price: optional minimum price (numeric)
+//   - max_price: optional maximum price (numeric)
+//
+// At least one parameter must be provided
 func SearchProductByQuery() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var ctx, cancel = context.WithTimeout(context.Background(), 100*time.Second)
 		defer cancel()
 
-		// Get Search Query from request
+		// Get query parameters
 		query := c.Query("search")
-		if query == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "search query is required"})
+		minPriceStr := c.Query("min_price")
+		maxPriceStr := c.Query("max_price")
+
+		// Validate that at least one search parameter is provided
+		if query == "" && minPriceStr == "" && maxPriceStr == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "at least one search parameter is required (search, min_price, or max_price)"})
 			return
 		}
 
@@ -444,48 +455,93 @@ func SearchProductByQuery() gin.HandlerFunc {
 			return
 		}
 
-		// Build search filter for product name and price
-		searchConditions := []bson.M{
-			{
+		// Build filter conditions
+		andConditions := []bson.M{}
+
+		// Add product name search if provided
+		if query != "" {
+			andConditions = append(andConditions, bson.M{
 				"product_name": bson.M{
 					"$regex":   query,
 					"$options": "i",
 				},
-			},
-			{
-				"price": bson.M{
-					"$gte": query,
-					"$lte": query,
-				},
-			},
+			})
 		}
 
-		// Combine search conditions with sold products exclusion
-		filter := bson.M{
-			"$and": []bson.M{
-				{"$or": searchConditions},
-			},
+		// Add price range filter if min_price or max_price is provided
+		priceFilter := bson.M{}
+		if minPriceStr != "" {
+			minPrice, err := strconv.ParseUint(minPriceStr, 10, 64)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "min_price must be a valid number"})
+				return
+			}
+			priceFilter["$gte"] = minPrice
+		}
+		if maxPriceStr != "" {
+			maxPrice, err := strconv.ParseUint(maxPriceStr, 10, 64)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "max_price must be a valid number"})
+				return
+			}
+			priceFilter["$lte"] = maxPrice
+		}
+
+		// Validate price range (min_price should be <= max_price if both are provided)
+		if minPriceStr != "" && maxPriceStr != "" {
+			minPrice, _ := strconv.ParseUint(minPriceStr, 10, 64)
+			maxPrice, _ := strconv.ParseUint(maxPriceStr, 10, 64)
+			if minPrice > maxPrice {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "min_price must be less than or equal to max_price"})
+				return
+			}
+		}
+
+		// Add price filter if it has any conditions
+		if len(priceFilter) > 0 {
+			andConditions = append(andConditions, bson.M{"price": priceFilter})
+		}
+
+		// Build final filter
+		filter := bson.M{}
+		if len(andConditions) > 0 {
+			filter["$and"] = andConditions
 		}
 
 		// Exclude sold products from search results
 		addSoldProductExclusion(filter, soldProductIDs)
 
-		cursor, err := ProductCollection.Find(ctx, filter)
+		// Get pagination parameters
+		pagination := helpers.GetPaginationParams(c)
+
+		// Get total count of matching products (not sold)
+		total, err := ProductCollection.CountDocuments(ctx, filter)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err})
+			helpers.InternalServerError(c, "error counting products")
+			return
+		}
+
+		// Query products with pagination
+		opts := options.Find()
+		opts.SetSkip(pagination.Skip)
+		opts.SetLimit(pagination.PageSize)
+
+		cursor, err := ProductCollection.Find(ctx, filter, opts)
+		if err != nil {
+			helpers.InternalServerError(c, "error fetching products")
 			return
 		}
 		defer cursor.Close(ctx)
 
-		var products []models.ProductUser
+		// Decode results
+		var products []models.Product
 		if err := cursor.All(ctx, &products); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode results"})
+			helpers.InternalServerError(c, "failed to decode results")
 			return
 		}
 
-		defer cancel()
-		c.JSON(http.StatusOK, gin.H{"success": true, "total_count": len(products), "data": products})
-
+		// Return paginated response
+		helpers.PaginatedSuccess(c, products, total, pagination)
 	}
 
 }

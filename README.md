@@ -85,11 +85,29 @@ A robust, scalable e-commerce backend API built with Go (Golang) and MongoDB. Th
    ```
 
 5. **Run the application**
+
+   Option 1: With Hot Reload (Recommended for Development)
+   ```bash
+   # Install air (if not already installed)
+   go install github.com/air-verse/air@latest
+   
+   # If 'air' command is not found, add Go bin to your PATH:
+   # For zsh/bash, add this to ~/.zshrc or ~/.bashrc:
+   # export PATH=$PATH:$(go env GOPATH)/bin
+   # Then run: source ~/.zshrc (or source ~/.bashrc)
+   
+   # Run with hot reload
+   air
+   ```
+   
+   Option 2: Standard Run
    ```bash
    go run main.go
    ```
 
    The server will start on `http://localhost:8000` (or the port specified in `.env`)
+   
+   **Note**: With `air`, the application will automatically rebuild and restart whenever you save changes to any `.go` file.
 
 ## 📁 Project Structure
 
