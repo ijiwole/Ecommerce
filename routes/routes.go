@@ -12,8 +12,9 @@ func UserRoutes(incomingRoutes *gin.Engine) {
 	incomingRoutes.POST("api/v1/users/login", controllers.Login())
 	incomingRoutes.POST("api/v1/admin/signup", controllers.AdminSignUp())
 	incomingRoutes.POST("api/v1/admin/login", controllers.AdminLogin())
-	incomingRoutes.GET("api/v1/users/productview", controllers.SearchProduct())
-	incomingRoutes.GET("api/v1/users/search", controllers.SearchProductByQuery())
+	// Search endpoints (public - no authentication required)
+	incomingRoutes.GET("api/v1/products/search", controllers.SearchProduct())
+	incomingRoutes.GET("api/v1/products/search/query", controllers.SearchProductByQuery())
 }
 
 // AdminRoutes sets up admin-related routes (requires authentication and admin privileges)

@@ -55,6 +55,30 @@ func VerifyPassword(userPassword string, givenPassword string) (bool, string) {
 	return true, "password is correct"
 }
 
+// addSoldProductExclusion adds a filter condition to exclude sold products from the given filter.
+// It handles both simple filters and filters with $and conditions.
+func addSoldProductExclusion(filter bson.M, soldProductIDs map[primitive.ObjectID]bool) {
+	if len(soldProductIDs) == 0 {
+		return
+	}
+
+	// Convert sold product IDs map to array
+	soldIDsArray := make([]primitive.ObjectID, 0, len(soldProductIDs))
+	for productID := range soldProductIDs {
+		soldIDsArray = append(soldIDsArray, productID)
+	}
+
+	exclusion := bson.M{"product_id": bson.M{"$nin": soldIDsArray}}
+
+	// If filter already has $and, append to it
+	if andConditions, ok := filter["$and"].([]bson.M); ok {
+		filter["$and"] = append(andConditions, exclusion)
+	} else {
+		// Otherwise, add directly to filter
+		filter["product_id"] = exclusion["product_id"]
+	}
+}
+
 func SignUp() gin.HandlerFunc {
 
 	return func(c *gin.Context) {
@@ -313,15 +337,7 @@ func GetAllProducts() gin.HandlerFunc {
 
 		// Build filter to exclude sold products
 		filter := bson.M{}
-		if len(soldProductIDs) > 0 {
-			// Create array of sold product IDs
-			soldIDsArray := make([]primitive.ObjectID, 0, len(soldProductIDs))
-			for productID := range soldProductIDs {
-				soldIDsArray = append(soldIDsArray, productID)
-			}
-			// Exclude sold products
-			filter["product_id"] = bson.M{"$nin": soldIDsArray}
-		}
+		addSoldProductExclusion(filter, soldProductIDs)
 
 		// Get total count of available products (not sold)
 		total, err := ProductCollection.CountDocuments(ctx, filter)
@@ -354,6 +370,7 @@ func GetAllProducts() gin.HandlerFunc {
 	}
 }
 
+// SearchProduct searches products by name (excludes sold products)
 func SearchProduct() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var ctx, cancel = context.WithTimeout(context.Background(), 100*time.Second)
@@ -366,8 +383,18 @@ func SearchProduct() gin.HandlerFunc {
 			return
 		}
 
+		// Get all sold product IDs
+		soldProductIDs, err := database.GetSoldProductIDs(UserCollection)
+		if err != nil {
+			helpers.InternalServerError(c, "error fetching sold products")
+			return
+		}
+
 		// Create Mongodb filter for text search
 		filter := bson.M{"product_name": bson.M{"$regex": query, "$options": "i"}}
+
+		// Exclude sold products from search results
+		addSoldProductExclusion(filter, soldProductIDs)
 
 		// Query Mongodb
 		cursor, err := ProductCollection.Find(ctx, filter)
@@ -397,6 +424,7 @@ func SearchProduct() gin.HandlerFunc {
 
 }
 
+// SearchProductByQuery searches products by name or price (excludes sold products)
 func SearchProductByQuery() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var ctx, cancel = context.WithTimeout(context.Background(), 100*time.Second)
@@ -409,23 +437,38 @@ func SearchProductByQuery() gin.HandlerFunc {
 			return
 		}
 
-		// Search in product name and price fields
-		filter := bson.M{
-			"$or": []bson.M{
-				{
-					"product_name": bson.M{
-						"$regex":   query,
-						"$options": "i",
-					},
+		// Get all sold product IDs
+		soldProductIDs, err := database.GetSoldProductIDs(UserCollection)
+		if err != nil {
+			helpers.InternalServerError(c, "error fetching sold products")
+			return
+		}
+
+		// Build search filter for product name and price
+		searchConditions := []bson.M{
+			{
+				"product_name": bson.M{
+					"$regex":   query,
+					"$options": "i",
 				},
-				{
-					"price": bson.M{
-						"$gte": query,
-						"$lte": query,
-					},
+			},
+			{
+				"price": bson.M{
+					"$gte": query,
+					"$lte": query,
 				},
 			},
 		}
+
+		// Combine search conditions with sold products exclusion
+		filter := bson.M{
+			"$and": []bson.M{
+				{"$or": searchConditions},
+			},
+		}
+
+		// Exclude sold products from search results
+		addSoldProductExclusion(filter, soldProductIDs)
 
 		cursor, err := ProductCollection.Find(ctx, filter)
 		if err != nil {
